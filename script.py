@@ -1,11 +1,9 @@
 import os
 from bs4 import BeautifulSoup
-import pandas as pd
 import requests
 
-# Use environment variable names correctly
-TOKEN = os.getenv("TELEGRAM_TOKEN", "9288693467:AAEv3ZpcW_mPIz_eQMc-h9JdsPg35FQQa9Q")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1919907897")
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 URL = "https://www.egx.com.eg/ar/InvestorsTypeCharts.aspx"
 
 
@@ -114,10 +112,14 @@ if __name__ == "__main__":
           )
         else:
           message_lines.append(f"- {record}")
-      message_lines.append("")  # Empty line between sections
+      message_lines.append("")
 
     final_message = "\n".join(message_lines)
     print(final_message)
-    send(final_message)
+    if TOKEN and CHAT_ID:
+      send(final_message)
+    else:
+      print("Telegram credentials missing.")
   else:
-    send("No data found or failed to scrape EGX website.")
+    if TOKEN and CHAT_ID:
+      send("No data found or failed to scrape EGX website.")
