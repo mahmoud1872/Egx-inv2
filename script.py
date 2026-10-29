@@ -1,145 +1,204 @@
 import io
 import os
+import re
 import time
-from bs4 import BeautifulSoup
+
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 URL = "https://www.egx.com.eg/ar/InvestorsTypeCharts.aspx"
 
+TOTAL_RUNS = 13
+INTERVAL_SECONDS = 1200  # 20 minutes
+
+# (keyword to look for, name shown in the message) - keywords are normalized
+TARGETS = [
+    ("الافراد", "الافراد حسب الجنسيه"),
+    ("المؤسسات", "المؤسسات حسب الجنسيه"),
+]
+
+
+def normalize(text):
+    """Make Arabic spelling variants comparable (أ/إ/آ -> ا, ة -> ه, ى -> ي)."""
+    text = str(text)
+    text = re.sub("[أإآ]", "ا", text)
+    text = text.replace("ة", "ه").replace("ى", "ي")
+    return text
+
+
+def fetch_html():
+    """Open the page in a headless browser. Saves debug files every run."""
+    xhr_log = []
+
+    def on_response(resp):
+        try:
+            ctype = resp.headers.get("content-type", "")
+            if any(t in ctype for t in ("json", "xml", "javascript")) or "ashx" in resp.url:
+                body = ""
+                try:
+                    body = resp.text()[:2000]
+                except Exception:
+                    pass
+                xhr_log.append(f"{resp.status} {ctype}\n{resp.url}\n{body}\n{'-' * 60}")
+        except Exception:
+            pass
+
+    html = None
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+            )
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                locale="ar-EG",
+                timezone_id="Africa/Cairo",
+                viewport={"width": 1366, "height": 900},
+            )
+            page = context.new_page()
+            page.on("response", on_response)
+            try:
+                page.goto(URL, timeout=90000, wait_until="domcontentloaded")
+                page.wait_for_timeout(10000)  # let dynamic content render
+            except Exception as e:
+                print(f"Page load problem: {e}")
+                with open("error.txt", "w", encoding="utf-8") as f:
+                    f.write(str(e))
+
+            # Debug files (uploaded as artifacts by the workflow)
+            try:
+                page.screenshot(path="page.png", full_page=True)
+            except Exception as e:
+                print(f"Screenshot failed: {e}")
+            try:
+                html = page.content()
+                with open("page.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+            except Exception as e:
+                print(f"Could not read page content: {e}")
+            browser.close()
+    except Exception as e:
+        print(f"Playwright error: {e}")
+        with open("error.txt", "w", encoding="utf-8") as f:
+            f.write(str(e))
+
+    with open("xhr_log.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(xhr_log) if xhr_log else "No JSON/XML responses captured")
+
+    return html
+
+
+def parse_tables(html):
+    extracted = {}
+
+    # 1. pandas read_html
+    try:
+        dfs = pd.read_html(io.StringIO(html))
+        print(f"pandas parsed {len(dfs)} tables.")
+        for df in dfs:
+            df_str = normalize(df.to_string())
+            for keyword, target_name in TARGETS:
+                if normalize(keyword) in df_str and target_name not in extracted:
+                    records = []
+                    for _, row in df.iterrows():
+                        vals = [str(v).strip() for v in row.values if pd.notna(v)]
+                        if len(vals) >= 2:
+                            records.append({"name": vals[0], "value": vals[-1]})
+                    if records:
+                        extracted[target_name] = records
+    except Exception as e:
+        print(f"pandas read_html warning: {e}")
+
+    # 2. BeautifulSoup fallback
+    if len(extracted) < len(TARGETS):
+        print("Running BeautifulSoup fallback...")
+        soup = BeautifulSoup(html, "html.parser")
+        for keyword, target_name in TARGETS:
+            if target_name in extracted:
+                continue
+            kw = normalize(keyword)
+            heading = soup.find(
+                lambda tag: tag.name in ["div", "span", "h2", "h3", "h4", "th", "td"]
+                and tag.get_text()
+                and kw in normalize(tag.get_text())
+            )
+            if heading:
+                table = heading.find_parent("table") or heading.find_next("table")
+                if table:
+                    records = []
+                    for tr in table.find_all("tr"):
+                        cols = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+                        if len(cols) >= 2:
+                            records.append({"name": cols[0], "value": cols[-1]})
+                    if records:
+                        extracted[target_name] = records
+
+    return extracted
+
 
 def get_data():
-  print("Launching headless browser to fetch EGX page...")
-  try:
-    with sync_playwright() as p:
-      browser = p.chromium.launch(
-          headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
-      )
-      page = browser.new_page()
-      page.goto(URL, timeout=90000, wait_until="networkidle")
-      # Wait for dynamic elements to render completely
-      page.wait_for_timeout(8000)
-      html_content = page.content()
-      browser.close()
-  except Exception as e:
-    print(f"Playwright error: {e}")
-    return None
+    print("Launching headless browser to fetch EGX page...")
+    html = fetch_html()
+    if not html:
+        print("No HTML received (site unreachable or blocked?).")
+        return None
 
-  extracted_data = {}
-  targets = [
-      ("الافراد", "الافراد حسب الجنسيه"),
-      ("المؤسسات", "المؤسسات حسب الجنسيه"),
-  ]
+    print(f"Received {len(html)} characters of HTML.")
+    data = parse_tables(html)
 
-  # 1. Try parsing via pandas read_html
-  try:
-    dfs = pd.read_html(io.StringIO(html_content))
-    print(f"Successfully parsed {len(dfs)} tables from page HTML via pandas.")
-    for idx, df in enumerate(dfs):
-      df_str = df.to_string()
-      for keyword, target_name in targets:
-        if keyword in df_str and target_name not in extracted_data:
-          records = []
-          for _, row in df.iterrows():
-            row_vals = [str(val).strip() for val in row.values if pd.notna(val)]
-            if len(row_vals) >= 2:
-              records.append({
-                  "جنسية": row_vals[0],
-                  "صافي قيمة جنيه مصري": row_vals[-1],
-              })
-          if records:
-            extracted_data[target_name] = records
-  except Exception as e:
-    print(f"Pandas read_html warning: {e}")
-
-  # 2. Fallback: BeautifulSoup deep scan if pandas missed anything
-  if len(extracted_data) < len(targets):
-    print(
-        "Running BeautifulSoup deep scan fallback for missing sections..."
-    )
-    soup = BeautifulSoup(html_content, "html.parser")
-    for keyword, target_name in targets:
-      if target_name in extracted_data:
-        continue
-      # Find any tag containing the keyword
-      heading_el = soup.find(
-          lambda tag: tag.name in ["div", "span", "h2", "h3", "h4", "th", "td"]
-          and tag.get_text()
-          and keyword in tag.get_text()
-      )
-      if heading_el:
-        table = heading_el.find_parent("table") or heading_el.find_next("table")
-        if table:
-          rows = table.find_all("tr")
-          records = []
-          for tr in rows:
-            cols = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-            if len(cols) >= 2:
-              records.append({"جنسية": cols[0], "صافي قيمة جنيه مصري": cols[-1]})
-          if records:
-            extracted_data[target_name] = records
-
-  # Diagnostic print if still empty
-  if not extracted_data:
-    print(
-        "--- DIAGNOSTIC: Page text snippet ---"
-    )
-    soup_diag = BeautifulSoup(html_content, "html.parser")
-    print(soup_diag.get_text()[:500])  # Print first 500 chars of page text
-
-  return extracted_data if extracted_data else None
+    if not data:
+        print("--- DIAGNOSTIC: page text snippet ---")
+        print(BeautifulSoup(html, "html.parser").get_text(" ", strip=True)[:800])
+        return None
+    return data
 
 
 def send(text):
-  if not TOKEN or not CHAT_ID:
-    print("Telegram credentials (TOKEN or CHAT_ID) are missing!")
-    return
-  url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-  try:
-    response = requests.post(
-        url, data={"chat_id": CHAT_ID, "text": text}, timeout=20
-    )
-    if not response.ok:
-      print(f"Failed to send Telegram message: {response.text}")
-    else:
-      print("Telegram message sent successfully.")
-  except Exception as e:
-    print(f"Telegram request failed: {e}")
+    if not TOKEN or not CHAT_ID:
+        print("Telegram credentials (TOKEN or CHAT_ID) are missing!")
+        return
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    try:
+        response = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=20)
+        if not response.ok:
+            print(f"Failed to send Telegram message: {response.text}")
+        else:
+            print("Telegram message sent successfully.")
+    except Exception as e:
+        print(f"Telegram request failed: {e}")
 
 
 if __name__ == "__main__":
-  total_runs = 13
-  interval_seconds = 1200  # 20 minutes
+    failure_notified = False
 
-  for run_idx in range(total_runs):
-    print(f"\n--- Run {run_idx + 1} of {total_runs} ---")
-    data = get_data()
+    for run_idx in range(TOTAL_RUNS):
+        print(f"\n--- Run {run_idx + 1} of {TOTAL_RUNS} ---")
+        data = get_data()
 
-    if data:
-      message_lines = []
-      for section, records in data.items():
-        message_lines.append(f"=== {section} ===")
-        for record in records:
-          if "جنسية" in record:
-            message_lines.append(
-                f"- {record['جنسية']}: {record['صافي قيمة جنيه مصري']}"
-            )
-          else:
-            message_lines.append(f"- {record}")
-        message_lines.append("")
+        if data:
+            lines = []
+            for section, records in data.items():
+                lines.append(f"=== {section} ===")
+                for rec in records:
+                    lines.append(f"- {rec['name']}: {rec['value']}")
+                lines.append("")
+            message = "\n".join(lines)
+            print(message)
+            send(message)
+        else:
+            print("No matching data found.")
+            # Only notify once per job so Telegram isn't spammed
+            if not failure_notified:
+                send("No data found or failed to scrape EGX website. Check the Actions log.")
+                failure_notified = True
 
-      final_message = "\n".join(message_lines)
-      print(final_message)
-      send(final_message)
-    else:
-      print("No matching data tables found.")
-      send(
-          "No data found or failed to scrape EGX website during scheduled run."
-      )
-
-    if run_idx < total_runs - 1:
-      print("Waiting 20 minutes for the next update...")
-      time.sleep(interval_seconds)
+        if run_idx < TOTAL_RUNS - 1:
+            print("Waiting 20 minutes for the next update...")
+            time.sleep(INTERVAL_SECONDS)
