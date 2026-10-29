@@ -8,6 +8,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,11 +21,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 pandas playwright
-          playwright install chromium
+          pip install requests beautifulsoup4 pandas lxml playwright
+          playwright install --with-deps chromium
 
       - name: Run scraper loop
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python script.py
+
+      - name: Upload debug files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug
+          path: |
+            page.png
+            page.html
+            xhr_log.txt
+            error.txt
+          if-no-files-found: ignore
