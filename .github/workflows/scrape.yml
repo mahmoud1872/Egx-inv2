@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install beautifulsoup4 pandas playwright
+          pip install requests beautifulsoup4 pandas playwright
           playwright install chromium
 
       - name: Run scraper loop
