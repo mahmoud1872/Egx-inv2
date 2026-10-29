@@ -2,6 +2,7 @@ import os
 import time
 from bs4 import BeautifulSoup
 import requests
+from playwright.sync_api import sync_playwright
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -9,21 +10,20 @@ URL = "https://www.egx.com.eg/ar/InvestorsTypeCharts.aspx"
 
 
 def get_data():
-  headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
-          " like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      )
-  }
-
   try:
-    r = requests.get(URL, headers=headers, timeout=20)
-    r.raise_for_status()
-  except requests.exceptions.RequestException as e:
-    print(f"Error fetching the webpage: {e}")
+    with sync_playwright() as p:
+      browser = p.chromium.launch(headless=True)
+      page = browser.new_page()
+      page.goto(URL, timeout=60000)
+      # Wait for the tables or content to load dynamically
+      page.wait_for_timeout(5000)
+      html_content = page.content()
+      browser.close()
+  except Exception as e:
+    print(f"Error fetching webpage with Playwright: {e}")
     return None
 
-  soup = BeautifulSoup(r.text, "html.parser")
+  soup = BeautifulSoup(html_content, "html.parser")
   targets = ["الافراد حسب الجنسيه", "المؤسسات حسب الجنسيه"]
   extracted_data = {}
 
@@ -87,7 +87,7 @@ def get_data():
 
     extracted_data[target] = structured_results
 
-  return extracted_data
+  return extracted_data if extracted_data else None
 
 
 def send(text):
