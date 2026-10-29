@@ -1,10 +1,10 @@
-name: Scrape EGX Data
+name: Scrape EGX Data Every 20 Mins
 
 on:
   schedule:
-    # Runs every day at 4:00 PM UTC (adjust as needed using cron syntax)
-    - cron: '0 16 * * *'
-  workflow_dispatch: # Allows you to run it manually from the GitHub UI
+    # Runs Sunday through Thursday at 8:20 AM UTC (10:20 AM Egypt Time)
+    - cron: '20 8 * * 0-4'
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -23,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 pandas
 
-      - name: Run scraper script
+      - name: Run scraper loop
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
