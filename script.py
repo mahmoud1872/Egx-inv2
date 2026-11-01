@@ -370,6 +370,7 @@ def send_telegram(message):
     return False
 
 
+
 def format_message(data, source):
 
     now = datetime.now(TIMEZONE)
@@ -379,7 +380,6 @@ def format_message(data, source):
         "",
         f"Date: {now.strftime('%Y-%m-%d')}",
         f"Time: {now.strftime('%H:%M:%S')}",
-        f"Source: {source}",
         "",
         "Net Transactions (EGP Million)",
         ""
@@ -398,99 +398,77 @@ def format_message(data, source):
         for name in names:
 
             value = data[name]
-
             formatted = f"{value:+,.2f}"
 
+            if value > 0:
+                indicator = "🟢"
+            elif value < 0:
+                indicator = "🔴"
+            else:
+                indicator = "⚪"
+
             lines.append(
-                f"{name}: {formatted} مليون"
+                f"{indicator} {name}: {formatted} مليون"
             )
 
         lines.append("")
 
-    lines.extend([
-        "Positive = Net Buying",
-        "Negative = Net Selling"
-    ])
-
     return "\n".join(lines)
+
 
 
 # ==========================================
 # MAIN LOOP
 # ==========================================
 
+
 if __name__ == "__main__":
 
-    failure_notified = False
+    now = datetime.now(TIMEZONE)
+
+    # Sunday to Thursday
+    if now.weekday() not in (6, 0, 1, 2, 3):
+        log("Outside trading days. Exiting.")
+        exit()
+
+    # Allowed Cairo time: 10:15 AM to 2:45 PM
+    current_minutes = now.hour * 60 + now.minute
+
+    start_minutes = 10 * 60 + 15
+    end_minutes = 14 * 60 + 45
+
+    if not start_minutes <= current_minutes <= end_minutes:
+        log("Outside sending hours. Exiting.")
+        exit()
+
+    # Allow up to 4 minutes of GitHub scheduling delay
+    if now.minute % 15 > 4:
+        log("Outside the scheduled execution window. Exiting.")
+        exit()
 
     log("Starting EGX investor scraper.")
 
-    for run_idx in range(TOTAL_RUNS):
+    try:
+        data, source = get_investor_data()
 
-        start_time = time.time()
+        if data:
+            message = format_message(data, source)
+            print("\n" + message)
+            send_telegram(message)
+        else:
+            log("No valid investor data found.")
 
-        log(
-            f"Run {run_idx + 1}/{TOTAL_RUNS}"
+            send_telegram(
+                "EGX Scraper Warning\n"
+                "Could not retrieve the six investor values.\n"
+                "Check GitHub Actions artifacts."
+            )
+
+    except Exception as e:
+        log(f"Unexpected error: {e}")
+
+        send_telegram(
+            f"EGX scraper error:\n{str(e)[:1000]}"
         )
-
-        try:
-
-            data, source = get_investor_data()
-
-            if data:
-
-                message = format_message(
-                    data,
-                    source
-                )
-
-                print("\n" + message)
-
-                send_telegram(message)
-
-                failure_notified = False
-
-            else:
-
-                log("No valid investor data found.")
-
-                if not failure_notified:
-
-                    send_telegram(
-                        "EGX Scraper Warning\n\n"
-                        "Could not extract the six investor "
-                        "net transaction values from Sigma "
-                        "or EGX.\n"
-                        "Check GitHub Actions artifacts."
-                    )
-
-                    failure_notified = True
-
-        except Exception as e:
-
-            log(f"Unexpected error: {e}")
-
-            if not failure_notified:
-
-                send_telegram(
-                    f"EGX scraper error:\n{str(e)[:1000]}"
-                )
-
-                failure_notified = True
-
-        if run_idx < TOTAL_RUNS - 1:
-
-            elapsed = time.time() - start_time
-
-            sleep_time = max(
-                0,
-                INTERVAL_SECONDS - elapsed
-            )
-
-            log(
-                f"Sleeping {sleep_time:.1f} seconds."
-            )
-
-            time.sleep(sleep_time)
 
     log("Scraper finished.")
