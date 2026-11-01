@@ -1,8 +1,8 @@
-name: Scrape EGX Data Every 20 Mins
+name: Scrape EGX Data Every 1 Min
 
 on:
   schedule:
-    - cron: '20 8 * * 0-4'
+    - cron: '*/5 8-14 * * 0-4' # Triggers every 5 mins, Sun-Thu
   workflow_dispatch:
 
 jobs:
@@ -24,11 +24,26 @@ jobs:
           pip install requests beautifulsoup4 pandas lxml playwright
           playwright install --with-deps chromium
 
-      - name: Run scraper loop
+      - name: Run high-frequency scraper loop
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python script.py
+        run: |
+          python -c "
+          import time, subprocess, sys
+          # Run the scraper every 60 seconds for 4.5 minutes per workflow trigger 
+          # to seamlessly hand off to the next cron trigger without gaps.
+          end_time = time.time() + 270 # 4.5 minutes
+          while time.time() < end_time:
+              start = time.time()
+              print('--- Starting scrape iteration ---', flush=True)
+              result = subprocess.run([sys.executable, 'script.py'])
+              
+              elapsed = time.time() - start
+              sleep_time = max(0, 60 - elapsed)
+              print(f'Iteration took {elapsed:.2f}s. Sleeping for {sleep_time:.2f}s...', flush=True)
+              time.sleep(sleep_time)
+          "
 
       - name: Upload debug files
         if: always()
