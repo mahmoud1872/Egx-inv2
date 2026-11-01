@@ -18,7 +18,44 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 SIGMA_URL = (
     "https://www.sigma-cap.com/main/"
-    "x_market_page_ar.overvi1
+    "x_market_page_ar.overview?u_sess="
+)
+
+EGX_URL = (
+    "https://www.egx.com.eg/ar/InvestorsTypeCharts.aspx"
+)
+
+TOTAL_RUNS = 5
+INTERVAL_SECONDS = 60
+PAGE_WAIT_SECONDS = 8000
+
+TIMEZONE = ZoneInfo("Africa/Cairo")
+
+INVESTORS = [
+    ("مصريين أفراد", 0),
+    ("مصريين مؤسسات", 1),
+    ("عرب أفراد", 2),
+    ("عرب مؤسسات", 3),
+    ("أجانب أفراد", 4),
+    ("أجانب مؤسسات", 5),
+]
+
+
+def log(message):
+    print(
+        f"[{datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}] "
+        f"{message}",
+        flush=True
+    )
+
+
+def save_file(filename, content):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def normalize(text):
+    text = str(text)
 
     translation = str.maketrans(
         "٠١٢٣٤٥٦٧٨٩٫٬−",
@@ -26,7 +63,6 @@ SIGMA_URL = (
     )
 
     text = text.translate(translation)
-
     text = re.sub(r"[أإآ]", "ا", text)
     text = text.replace("ة", "ه").replace("ى", "ي")
 
