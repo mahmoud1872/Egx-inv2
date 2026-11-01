@@ -12,8 +12,8 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 URL = "https://www.egx.com.eg/ar/InvestorsTypeCharts.aspx"
 
-TOTAL_RUNS = 13
-INTERVAL_SECONDS = 1200  # 20 minutes
+TOTAL_RUNS = 260       # Adjust total runs to cover your session window (~4.3 hours)
+INTERVAL_SECONDS = 60  # 1 minute interval
 
 # (keyword to look for, name shown in the message) - keywords are normalized
 TARGETS = [
@@ -194,11 +194,10 @@ if __name__ == "__main__":
             send(message)
         else:
             print("No matching data found.")
-            # Only notify once per job so Telegram isn't spammed
             if not failure_notified:
                 send("No data found or failed to scrape EGX website. Check the Actions log.")
                 failure_notified = True
 
         if run_idx < TOTAL_RUNS - 1:
-            print("Waiting 20 minutes for the next update...")
+            print(f"Waiting {INTERVAL_SECONDS} seconds for the next update...")
             time.sleep(INTERVAL_SECONDS)
