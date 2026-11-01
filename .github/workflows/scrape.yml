@@ -3,7 +3,7 @@ name: EGX Investor Net Transactions
 
 on:
   schedule:
-    - cron: '*/5 8-14 * * 0-4'
+    - cron: '*/15 7-12 * * 0-4'
 
   workflow_dispatch:
 
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
