@@ -1,9 +1,12 @@
-
 name: EGX Investor Net Transactions
 
 on:
   schedule:
-    - cron: '*/15 7-12 * * 0-4'
+    # 10:15, 10:30, 10:45 AM Cairo time (UTC+2)
+    - cron: '15,30,45 8 * * 0-4'
+
+    # 11:00 AM to 2:45 PM Cairo time
+    - cron: '*/15 9-12 * * 0-4'
 
   workflow_dispatch:
 
@@ -34,12 +37,29 @@ jobs:
           pip install requests beautifulsoup4 playwright
           playwright install --with-deps chromium
 
+      - name: Verify Telegram credentials
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+
+          if not os.environ.get("TELEGRAM_TOKEN"):
+              raise RuntimeError("TELEGRAM_TOKEN is missing")
+
+          if not os.environ.get("TELEGRAM_CHAT_ID"):
+              raise RuntimeError("TELEGRAM_CHAT_ID is missing")
+
+          print("Telegram credentials are configured.")
+          PY
+
       - name: Run investor scraper
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python script.py
+          python -u script.py
 
       - name: Upload debug files
         if: always()
