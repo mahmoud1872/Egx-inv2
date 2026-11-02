@@ -442,9 +442,9 @@ if __name__ == "__main__":
         exit()
 
     # Allow up to 4 minutes of GitHub scheduling delay
-    if now.minute % 15 > 4:
-        log("Outside the scheduled execution window. Exiting.")
-        exit()
+if now.minute % 15 > 4:
+    log("Outside the scheduled execution window. Exiting.")
+    exit()
 
     log("Starting EGX investor scraper.")
 
