@@ -1,13 +1,12 @@
-
 import os
 import re
-import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+
 
 # ==========================================
 # CONFIGURATION
@@ -25,8 +24,6 @@ EGX_URL = (
     "https://www.egx.com.eg/ar/InvestorsTypeCharts.aspx"
 )
 
-TOTAL_RUNS = 5
-INTERVAL_SECONDS = 60
 PAGE_WAIT_SECONDS = 8000
 
 TIMEZONE = ZoneInfo("Africa/Cairo")
@@ -41,6 +38,10 @@ INVESTORS = [
 ]
 
 
+# ==========================================
+# LOGGING AND FILES
+# ==========================================
+
 def log(message):
     print(
         f"[{datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -50,16 +51,20 @@ def log(message):
 
 
 def save_file(filename, content):
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
+    with open(filename, "w", encoding="utf-8") as file:
+        file.write(content)
 
+
+# ==========================================
+# NUMBER NORMALIZATION
+# ==========================================
 
 def normalize(text):
     text = str(text)
 
     translation = str.maketrans(
         "٠١٢٣٤٥٦٧٨٩٫٬−",
-        "0123456789,,-"
+        "0123456789.,-"
     )
 
     text = text.translate(translation)
@@ -70,11 +75,6 @@ def normalize(text):
 
 
 def parse_number(value):
-    """
-    Convert a cell containing a number into float.
-    Supports Arabic and English digits.
-    """
-
     value = normalize(value)
 
     value = value.replace(",", "")
@@ -125,13 +125,13 @@ def fetch_page(url, prefix):
                 f"BODY:\n{body[:100000]}\n"
             )
 
-        except Exception as e:
-            log(f"Network logging error: {e}")
+        except Exception as error:
+            log(f"Network logging error: {error}")
 
     try:
-        with sync_playwright() as p:
+        with sync_playwright() as playwright:
 
-            browser = p.chromium.launch(
+            browser = playwright.chromium.launch(
                 headless=True,
                 args=[
                     "--no-sandbox",
@@ -154,7 +154,6 @@ def fetch_page(url, prefix):
             )
 
             page = context.new_page()
-
             page.on("response", on_response)
 
             log(f"Opening {prefix}: {url}")
@@ -195,18 +194,24 @@ def fetch_page(url, prefix):
                     full_page=True
                 )
 
-            except Exception as e:
-                log(f"{prefix} page error: {e}")
+            except Exception as error:
+                log(f"{prefix} page error: {error}")
 
                 save_file(
                     f"{prefix.lower()}_error.txt",
-                    str(e)
+                    str(error)
                 )
 
-            browser.close()
+            finally:
+                browser.close()
 
-    except Exception as e:
-        log(f"{prefix} browser error: {e}")
+    except Exception as error:
+        log(f"{prefix} browser error: {error}")
+
+        save_file(
+            f"{prefix.lower()}_error.txt",
+            str(error)
+        )
 
     save_file(
         f"{prefix.lower()}_network.txt",
@@ -223,20 +228,9 @@ def fetch_page(url, prefix):
 # ==========================================
 
 def extract_from_html(html):
-    """
-    Extract the six values from the row:
-    صافي (مليون)
-
-    Expected column order:
-    Egyptian individuals
-    Egyptian institutions
-    Arab individuals
-    Arab institutions
-    Foreign individuals
-    Foreign institutions
-    """
 
     if not html:
+        log("Cannot extract data: HTML is empty.")
         return None
 
     soup = BeautifulSoup(html, "html.parser")
@@ -247,7 +241,6 @@ def extract_from_html(html):
             table.get_text(" ", strip=True)
         )
 
-        # Validate investor table
         if not all(
             keyword in table_text
             for keyword in ("مصريين", "عرب", "اجانب")
@@ -279,6 +272,9 @@ def extract_from_html(html):
                     values.append(number)
 
             if len(values) < 6:
+                log(
+                    "Found net row, but fewer than six numeric values."
+                )
                 continue
 
             result = {
@@ -290,17 +286,11 @@ def extract_from_html(html):
 
             return result
 
+    log("Investor table or net row was not found.")
     return None
 
 
 def get_investor_data():
-    """
-    Sigma is the primary source.
-    EGX is the fallback source.
-
-    A source is accepted only if it contains
-    the complete investor table and net row.
-    """
 
     log("Trying Sigma Capital...")
 
@@ -343,33 +333,44 @@ def send_telegram(message):
         log("Telegram credentials are missing.")
         return False
 
-    url = (
-        f"https://api.telegram.org/bot"
-        f"{TOKEN}/sendMessage"
-    )
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
     try:
         response = requests.post(
             url,
-            data={
+            json={
                 "chat_id": CHAT_ID,
                 "text": message
             },
             timeout=20
         )
 
-        if response.ok:
-            log("Telegram message sent.")
+        log(f"Telegram HTTP status: {response.status_code}")
+
+        try:
+            result = response.json()
+        except ValueError:
+            log(
+                "Telegram returned invalid JSON: "
+                f"{response.text[:1000]}"
+            )
+            return False
+
+        if response.ok and result.get("ok") is True:
+            log("Telegram message sent successfully.")
             return True
 
-        log(f"Telegram error: {response.text}")
+        log(f"Telegram API error: {result}")
+        return False
 
-    except Exception as e:
-        log(f"Telegram request failed: {e}")
+    except Exception as error:
+        log(f"Telegram request failed: {error}")
+        return False
 
-    return False
 
-
+# ==========================================
+# MESSAGE FORMATTING
+# ==========================================
 
 def format_message(data, source):
 
@@ -380,6 +381,7 @@ def format_message(data, source):
         "",
         f"Date: {now.strftime('%Y-%m-%d')}",
         f"Time: {now.strftime('%H:%M:%S')}",
+        f"Source: {source}",
         "",
         "Net Transactions (EGP Million)",
         ""
@@ -416,20 +418,23 @@ def format_message(data, source):
     return "\n".join(lines)
 
 
-
 # ==========================================
-# MAIN LOOP
+# MAIN
 # ==========================================
-
 
 if __name__ == "__main__":
 
     now = datetime.now(TIMEZONE)
 
+    log(
+        f"Workflow started at Cairo time: "
+        f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
     # Sunday to Thursday
     if now.weekday() not in (6, 0, 1, 2, 3):
         log("Outside trading days. Exiting.")
-        exit()
+        raise SystemExit(0)
 
     # Allowed Cairo time: 10:15 AM to 2:45 PM
     current_minutes = now.hour * 60 + now.minute
@@ -439,36 +444,42 @@ if __name__ == "__main__":
 
     if not start_minutes <= current_minutes <= end_minutes:
         log("Outside sending hours. Exiting.")
-        exit()
-
-    # Allow up to 4 minutes of GitHub scheduling delay
-if now.minute % 15 > 4:
-    log("Outside the scheduled execution window. Exiting.")
-    exit()
+        raise SystemExit(0)
 
     log("Starting EGX investor scraper.")
 
     try:
         data, source = get_investor_data()
 
-        if data:
-            message = format_message(data, source)
-            print("\n" + message)
-            send_telegram(message)
-        else:
-            log("No valid investor data found.")
-
-            send_telegram(
-                "EGX Scraper Warning\n"
-                "Could not retrieve the six investor values.\n"
-                "Check GitHub Actions artifacts."
+        if data is None:
+            raise RuntimeError(
+                "Could not extract the six investor values "
+                "from Sigma or EGX."
             )
 
-    except Exception as e:
-        log(f"Unexpected error: {e}")
+        message = format_message(data, source)
 
-        send_telegram(
-            f"EGX scraper error:\n{str(e)[:1000]}"
+        print("\n" + message, flush=True)
+
+        sent = send_telegram(message)
+
+        if not sent:
+            raise RuntimeError(
+                "Telegram message sending failed."
+            )
+
+        log("Scraper finished successfully.")
+
+    except Exception as error:
+
+        log(f"Scraper failed: {error}")
+
+        error_sent = send_telegram(
+            "EGX scraper error:\n"
+            f"{str(error)[:1000]}"
         )
 
-    log("Scraper finished.")
+        if not error_sent:
+            log("Could not send the error notification to Telegram.")
+
+        raise
